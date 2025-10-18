@@ -104,7 +104,7 @@ async def check_matches():
 # 🔵 BARCELONA COMMANDS
 @bot.command()
 async def barca(ctx):
-    """Show all Barcelona matches"""
+    """Show ONLY upcoming Barcelona matches"""
     if not tracker.current_matches:
         await ctx.send("🔵🔴 Fetching Barcelona matches...")
         tracker.current_matches = await tracker.get_barcelona_matches()
@@ -118,7 +118,32 @@ async def barca(ctx):
         await ctx.send(embed=embed)
         return
     
-    for match in tracker.current_matches[:3]:  # Show max 3 matches
+    # FILTER: ONLY show UPCOMING matches (no finished, no live)
+    upcoming_matches = []
+    for match in tracker.current_matches:
+        status = match['status']
+        
+        # ONLY show scheduled/upcoming matches
+        if status in ['SCHEDULED', 'TIMED']:  # TIMED = specific start time set
+            upcoming_matches.append(match)
+    
+    # Sort by date (closest match first)
+    upcoming_matches.sort(key=lambda x: x['utcDate'])
+    
+    # Take only the 3 closest upcoming matches
+    upcoming_matches = upcoming_matches[:3]
+    
+    if not upcoming_matches:
+        embed = discord.Embed(
+            title="🔵🔴 No Upcoming Matches",
+            description="No scheduled matches found. Check back later!",
+            color=0x004b98
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    # Send embeds
+    for match in upcoming_matches:
         embed = tracker.format_match_embed(match)
         await ctx.send(embed=embed)
 
@@ -148,16 +173,22 @@ async def hello(ctx):
     await ctx.send(f'👋 Hello {ctx.author.mention}!')
 
 @bot.command()
+async def hi(ctx):
+    """Say hi to the bot"""
+    await ctx.send(f'👋 Hi {ctx.author.mention}!')
+
+@bot.command()
 async def help_bot(ctx):
     """Show all available commands"""
     embed = discord.Embed(
         title="🔵🔴 Barcelona Bot Commands",
         color=0x004b98
     )
-    embed.add_field(name="!barca", value="Show all Barcelona matches", inline=False)
+    embed.add_field(name="!barca", value="Show upcoming Barcelona matches", inline=False)
     embed.add_field(name="!barca_live", value="Show only LIVE matches", inline=False)
     embed.add_field(name="!ping", value="Check bot latency", inline=False)
     embed.add_field(name="!hello", value="Say hello to the bot", inline=False)
+    embed.add_field(name="!hi", value="Say hi to the bot", inline=False)
     embed.add_field(name="!help_bot", value="Show this help message", inline=False)
     
     await ctx.send(embed=embed)
