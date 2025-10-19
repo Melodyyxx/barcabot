@@ -335,6 +335,37 @@ async def test_notification(ctx):
         await ctx.send(f"❌ **Error:** {e}")
 
 @bot.command()
+async def test_goal(ctx):
+    """Test goal notifications by simulating a goal"""
+    try:
+        CHANNEL_ID = int(os.getenv('NOTIFICATION_CHANNEL_ID'))
+        channel = bot.get_channel(CHANNEL_ID)
+        
+        if not channel:
+            await ctx.send("❌ Could not find notification channel!")
+            return
+        
+        # Simulate a Barcelona goal
+        test_match = {
+            'homeTeam': {'name': 'Barcelona', 'id': BARCELONA_TEAM_ID},
+            'awayTeam': {'name': 'Test Team', 'id': 999},
+            'competition': {'name': 'Test Match'},
+            'score': {'fullTime': {'home': 1, 'away': 0}, 'halfTime': {'home': 1, 'away': 0}}
+        }
+        
+        test_goal = {
+            'minute': '23',
+            'scorer': {'name': 'Robert Lewandowski'},
+            'team': {'id': BARCELONA_TEAM_ID}
+        }
+        
+        await send_goal_notification(test_match, test_goal)
+        await ctx.send("✅ **Test goal notification sent!** Check your notification channel!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
+
+@bot.command()
 async def help_bot(ctx):
     """Show all available commands"""
     embed = discord.Embed(
@@ -344,7 +375,8 @@ async def help_bot(ctx):
     embed.add_field(name="!barca", value="Show upcoming Barcelona matches", inline=False)
     embed.add_field(name="!barca_live", value="Show only LIVE matches", inline=False)
     embed.add_field(name="!echo [message]", value="Repeat your message", inline=False)
-    embed.add_field(name="!test_notification", value="Test if match notifications work", inline=False)
+    embed.add_field(name="!test_notification", value="Test match start notifications", inline=False)
+    embed.add_field(name="!test_goal", value="Test goal notifications", inline=False)  # NEW
     embed.add_field(name="!ping", value="Check bot latency", inline=False)
     embed.add_field(name="!hello", value="Say hello to the bot", inline=False)
     embed.add_field(name="!hi", value="Say hi to the bot", inline=False)
