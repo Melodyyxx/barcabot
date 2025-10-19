@@ -3,14 +3,18 @@ import os
 import aiohttp
 import asyncio
 from discord.ext import commands, tasks
+from datetime import datetime, timedelta
 
 intents = discord.Intents.all()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Football API configuration
-FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY')  # You'll get a free API key
-BARCELONA_TEAM_ID = 81  # Barcelona's ID in most APIs
+FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY')
+BARCELONA_TEAM_ID = 81
+
+# Store match notifications to avoid duplicates
+notified_matches = set()
 
 class BarcelonaTracker:
     def __init__(self):
@@ -28,13 +32,13 @@ class BarcelonaTracker:
                     data = await response.json()
                     return data['matches']
         except:
-            # Fallback to manual data if API fails
             return self.get_manual_matches()
     
     def get_manual_matches(self):
         """Manual match data as fallback"""
         return [
             {
+                'id': 1,
                 'homeTeam': {'name': 'Barcelona'},
                 'awayTeam': {'name': 'Olympiacos'},
                 'competition': {'name': 'Champions League'},
@@ -50,9 +54,8 @@ class BarcelonaTracker:
         away_team = match['awayTeam']['name']
         competition = match['competition']['name']
         status = match['status']
-        date = match['utcDate'][:10]  # Just the date part
+        date = match['utcDate'][:10]
         
-        # Status emojis and text
         status_info = {
             'SCHEDULED': ('🟢', 'UPCOMING'),
             'LIVE': ('🔴', 'LIVE'),
@@ -72,13 +75,11 @@ class BarcelonaTracker:
         embed.add_field(name="📅 Date", value=date, inline=True)
         embed.add_field(name="📊 Status", value=f"{emoji} {status_text}", inline=True)
         
-        # Add scores if available
         if match['score']['fullTime']['home'] is not None:
             home_score = match['score']['fullTime']['home']
             away_score = match['score']['fullTime']['away']
             embed.add_field(name="🎯 Score", value=f"{home_score} - {away_score}", inline=False)
         
-        # Add match time if live
         if status in ['LIVE', 'IN_PLAY'] and match.get('minute'):
             embed.add_field(name="⏰ Minute", value=f"{match['minute']}'", inline=True)
         
@@ -91,15 +92,60 @@ async def on_ready():
     print(f'✅ {bot.user} is now online!')
     print('🔵🔴 Barcelona LIVE tracker is ready!')
     await bot.change_presence(activity=discord.Game(name="!barca for live matches"))
-    check_matches.start()  # Start background task
+    check_matches.start()
+    check_match_starts.start()
 
-@tasks.loop(minutes=5)  # Check every 5 minutes
+@tasks.loop(minutes=5)
 async def check_matches():
     """Background task to check for match updates"""
     try:
         tracker.current_matches = await tracker.get_barcelona_matches()
     except Exception as e:
         print(f"Error updating matches: {e}")
+
+@tasks.loop(minutes=1)
+async def check_match_starts():
+    """Check if any matches have just started"""
+    try:
+        for match in tracker.current_matches:
+            match_id = match.get('id')
+            status = match['status']
+            
+            if status in ['LIVE', 'IN_PLAY'] and match_id not in notified_matches:
+                await send_match_start_notification(match)
+                notified_matches.add(match_id)
+                
+    except Exception as e:
+        print(f"Error checking match starts: {e}")
+
+async def send_match_start_notification(match):
+    """Send notification to SPECIFIC channel from environment variable"""
+    home_team = match['homeTeam']['name']
+    away_team = match['awayTeam']['name']
+    competition = match['competition']['name']
+    
+    embed = discord.Embed(
+        title="🚨 **MATCH STARTED!** 🚨",
+        description=f"**{home_team} vs {away_team}**\n🏆 {competition}",
+        color=0x00ff00
+    )
+    embed.add_field(name="📊 Status", value="🔴 **LIVE**", inline=True)
+    embed.add_field(name="⏰ Started", value="Just now!", inline=True)
+    embed.add_field(name="📺 Watch", value="Check your sports app!", inline=False)
+    embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/en/thumb/4/47/FC_Barcelona_%28crest%29.svg/1200px-FC_Barcelona_%28crest%29.svg.png")
+    
+    # Get channel ID from environment variable
+    CHANNEL_ID = int(os.getenv('NOTIFICATION_CHANNEL_ID'))
+    
+    try:
+        channel = bot.get_channel(CHANNEL_ID)
+        if channel:
+            await channel.send(embed=embed)
+            print(f"✅ Match notification sent to channel: {channel.name}")
+        else:
+            print("❌ Could not find the specified channel")
+    except Exception as e:
+        print(f"❌ Error sending notification: {e}")
 
 # 🔵 BARCELONA COMMANDS
 @bot.command()
@@ -118,19 +164,13 @@ async def barca(ctx):
         await ctx.send(embed=embed)
         return
     
-    # FILTER: ONLY show UPCOMING matches (no finished, no live)
     upcoming_matches = []
     for match in tracker.current_matches:
         status = match['status']
-        
-        # ONLY show scheduled/upcoming matches
-        if status in ['SCHEDULED', 'TIMED']:  # TIMED = specific start time set
+        if status in ['SCHEDULED', 'TIMED']:
             upcoming_matches.append(match)
     
-    # Sort by date (closest match first)
     upcoming_matches.sort(key=lambda x: x['utcDate'])
-    
-    # Take only the 3 closest upcoming matches
     upcoming_matches = upcoming_matches[:3]
     
     if not upcoming_matches:
@@ -142,7 +182,6 @@ async def barca(ctx):
         await ctx.send(embed=embed)
         return
     
-    # Send embeds
     for match in upcoming_matches:
         embed = tracker.format_match_embed(match)
         await ctx.send(embed=embed)
