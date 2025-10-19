@@ -13,8 +13,10 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY')
 BARCELONA_TEAM_ID = 81
 
-# Store match notifications to avoid duplicates
+# Store match data to detect changes
+match_cache = {}
 notified_matches = set()
+goal_cache = {}  # Track goals to avoid duplicates
 
 class BarcelonaTracker:
     def __init__(self):
@@ -39,12 +41,14 @@ class BarcelonaTracker:
         return [
             {
                 'id': 1,
-                'homeTeam': {'name': 'Barcelona'},
-                'awayTeam': {'name': 'Olympiacos'},
+                'homeTeam': {'name': 'Barcelona', 'id': BARCELONA_TEAM_ID},
+                'awayTeam': {'name': 'Olympiacos', 'id': 654},
                 'competition': {'name': 'Champions League'},
                 'status': 'SCHEDULED',
                 'utcDate': '2024-11-05T20:00:00Z',
-                'score': {'fullTime': {'home': None, 'away': None}}
+                'score': {'fullTime': {'home': None, 'away': None},
+                         'halfTime': {'home': None, 'away': None}},
+                'goals': []
             }
         ]
     
@@ -90,10 +94,11 @@ tracker = BarcelonaTracker()
 @bot.event
 async def on_ready():
     print(f'✅ {bot.user} is now online!')
-    print('🔵🔴 Barcelona LIVE tracker is ready!')
+    print('🔵🔴 Barcelona LIVE tracker with GOAL ALERTS is ready!')
     await bot.change_presence(activity=discord.Game(name="!barca for live matches"))
     check_matches.start()
     check_match_starts.start()
+    check_goals.start()
 
 @tasks.loop(minutes=5)
 async def check_matches():
@@ -114,12 +119,43 @@ async def check_match_starts():
             if status in ['LIVE', 'IN_PLAY'] and match_id not in notified_matches:
                 await send_match_start_notification(match)
                 notified_matches.add(match_id)
+                goal_cache[match_id] = set()
                 
     except Exception as e:
         print(f"Error checking match starts: {e}")
 
+@tasks.loop(minutes=1)
+async def check_goals():
+    """Check for new goals in live matches"""
+    try:
+        for match in tracker.current_matches:
+            match_id = match.get('id')
+            status = match['status']
+            
+            if status not in ['LIVE', 'IN_PLAY']:
+                continue
+            
+            current_goals = match.get('goals', [])
+            
+            if match_id in goal_cache:
+                previous_goals = goal_cache[match_id]
+                current_goal_ids = {goal.get('minute', '') for goal in current_goals}
+                
+                new_goals = current_goal_ids - previous_goals
+                
+                for goal in current_goals:
+                    goal_minute = goal.get('minute', '')
+                    if goal_minute in new_goals:
+                        await send_goal_notification(match, goal)
+                        goal_cache[match_id].add(goal_minute)
+            
+            goal_cache[match_id] = {goal.get('minute', '') for goal in current_goals}
+                
+    except Exception as e:
+        print(f"Error checking goals: {e}")
+
 async def send_match_start_notification(match):
-    """Send notification to SPECIFIC channel from environment variable"""
+    """Send notification when match starts"""
     home_team = match['homeTeam']['name']
     away_team = match['awayTeam']['name']
     competition = match['competition']['name']
@@ -131,17 +167,59 @@ async def send_match_start_notification(match):
     )
     embed.add_field(name="📊 Status", value="🔴 **LIVE**", inline=True)
     embed.add_field(name="⏰ Started", value="Just now!", inline=True)
-    embed.add_field(name="📺 Watch", value="Check your sports app!", inline=False)
+    embed.add_field(name="🔔 Alerts", value="Goal notifications activated! ⚽", inline=False)
     embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/en/thumb/4/47/FC_Barcelona_%28crest%29.svg/1200px-FC_Barcelona_%28crest%29.svg.png")
     
-    # Get channel ID from environment variable
-    CHANNEL_ID = int(os.getenv('NOTIFICATION_CHANNEL_ID'))
+    await send_to_notification_channel(embed)
+
+async def send_goal_notification(match, goal):
+    """Send notification when a goal is scored"""
+    home_team = match['homeTeam']['name']
+    away_team = match['awayTeam']['name']
+    home_score = match['score']['fullTime']['home'] or match['score']['halfTime']['home'] or 0
+    away_score = match['score']['fullTime']['away'] or match['score']['halfTime']['away'] or 0
     
+    scorer = goal.get('scorer', {}).get('name', 'Unknown Player')
+    minute = goal.get('minute', 'Unknown')
+    team_id = goal.get('team', {}).get('id')
+    
+    scoring_team = home_team if team_id == match['homeTeam']['id'] else away_team
+    is_barcelona_goal = team_id == BARCELONA_TEAM_ID
+    
+    if is_barcelona_goal:
+        color = 0x004b98
+        goal_emoji = "🔵🔴"
+        title = "🎉 **BARCELONA GOAL!** 🎉"
+    else:
+        color = 0xff0000
+        goal_emoji = "😞"
+        title = "⚽ **GOAL SCORED** ⚽"
+    
+    embed = discord.Embed(
+        title=title,
+        description=f"**{scoring_team}** scores!\n{goal_emoji}",
+        color=color
+    )
+    
+    embed.add_field(name="👤 Scorer", value=scorer, inline=True)
+    embed.add_field(name="⏰ Minute", value=f"{minute}'", inline=True)
+    embed.add_field(name="📊 Score", value=f"**{home_score} - {away_score}**", inline=True)
+    embed.add_field(name="🏆 Match", value=f"{home_team} vs {away_team}", inline=False)
+    
+    if is_barcelona_goal:
+        embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/en/thumb/4/47/FC_Barcelona_%28crest%29.svg/1200px-FC_Barcelona_%28crest%29.svg.png")
+    
+    await send_to_notification_channel(embed)
+
+async def send_to_notification_channel(embed):
+    """Send embed to notification channel"""
     try:
+        CHANNEL_ID = int(os.getenv('NOTIFICATION_CHANNEL_ID'))
         channel = bot.get_channel(CHANNEL_ID)
+        
         if channel:
             await channel.send(embed=embed)
-            print(f"✅ Match notification sent to channel: {channel.name}")
+            print(f"✅ Notification sent to channel: {channel.name}")
         else:
             print("❌ Could not find the specified channel")
     except Exception as e:
@@ -199,40 +277,17 @@ async def barca_live(ctx):
         embed = tracker.format_match_embed(match)
         await ctx.send(embed=embed)
 
-# 🧪 TEST COMMAND
-@bot.command()
-async def test_notification(ctx):
-    """Test if notification channel is working"""
-    try:
-        # Get channel ID from environment variable
-        CHANNEL_ID = int(os.getenv('NOTIFICATION_CHANNEL_ID'))
-        channel = bot.get_channel(CHANNEL_ID)
-        
-        if not channel:
-            await ctx.send("❌ **Error:** Could not find the notification channel!")
-            return
-        
-        # Create test embed
-        embed = discord.Embed(
-            title="🧪 **TEST NOTIFICATION** 🧪",
-            description="If you can see this, auto-notifications are working!",
-            color=0xFFFF00
-        )
-        embed.add_field(name="📊 Status", value="✅ **TEST SUCCESSFUL**", inline=True)
-        embed.add_field(name="🔔 Channel", value=f"#{channel.name}", inline=True)
-        embed.add_field(name="🏆 Next", value="Real match notifications will work!", inline=False)
-        embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/en/thumb/4/47/FC_Barcelona_%28crest%29.svg/1200px-FC_Barcelona_%28crest%29.svg.png")
-        
-        # Send test notification
-        await channel.send(embed=embed)
-        await ctx.send(f"✅ **Test notification sent to** #{channel.name}!")
-        
-    except ValueError:
-        await ctx.send("❌ **Error:** NOTIFICATION_CHANNEL_ID is not set or invalid!")
-    except Exception as e:
-        await ctx.send(f"❌ **Error:** {e}")
-
 # 🛠️ UTILITY COMMANDS
+@bot.command()
+async def echo(ctx, *, message):
+    """Repeat whatever message you send"""
+    try:
+        await ctx.message.delete()
+    except:
+        pass
+    
+    await ctx.send(message)
+
 @bot.command()
 async def ping(ctx):
     """Check bot latency"""
@@ -249,17 +304,35 @@ async def hi(ctx):
     """Say hi to the bot"""
     await ctx.send(f'👋 Hi {ctx.author.mention}!')
 
+# 🧪 TEST COMMANDS
 @bot.command()
-async def echo(ctx, *, message):
-    """Repeat whatever message you send"""
-    # Delete the original command message
+async def test_notification(ctx):
+    """Test if notification channel is working"""
     try:
-        await ctx.message.delete()
-    except:
-        pass  # If we can't delete it, just continue
-    
-    # Send the echoed message
-    await ctx.send(message)
+        CHANNEL_ID = int(os.getenv('NOTIFICATION_CHANNEL_ID'))
+        channel = bot.get_channel(CHANNEL_ID)
+        
+        if not channel:
+            await ctx.send("❌ **Error:** Could not find the notification channel!")
+            return
+        
+        embed = discord.Embed(
+            title="🧪 **TEST NOTIFICATION** 🧪",
+            description="If you can see this, auto-notifications are working!",
+            color=0xFFFF00
+        )
+        embed.add_field(name="📊 Status", value="✅ **TEST SUCCESSFUL**", inline=True)
+        embed.add_field(name="🔔 Channel", value=f"#{channel.name}", inline=True)
+        embed.add_field(name="🏆 Features", value="Match start + Goal alerts activated! ⚽", inline=False)
+        embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/en/thumb/4/47/FC_Barcelona_%28crest%29.svg/1200px-FC_Barcelona_%28crest%29.svg.png")
+        
+        await channel.send(embed=embed)
+        await ctx.send(f"✅ **Test notification sent to** #{channel.name}!")
+        
+    except ValueError:
+        await ctx.send("❌ **Error:** NOTIFICATION_CHANNEL_ID is not set or invalid!")
+    except Exception as e:
+        await ctx.send(f"❌ **Error:** {e}")
 
 @bot.command()
 async def help_bot(ctx):
@@ -270,8 +343,7 @@ async def help_bot(ctx):
     )
     embed.add_field(name="!barca", value="Show upcoming Barcelona matches", inline=False)
     embed.add_field(name="!barca_live", value="Show only LIVE matches", inline=False)
-    embed.add_field(name="!player [name]", value="Get player stats and info", inline=False)
-    embed.add_field(name="!echo [message]", value="Repeat your message", inline=False)  # NEW
+    embed.add_field(name="!echo [message]", value="Repeat your message", inline=False)
     embed.add_field(name="!test_notification", value="Test if match notifications work", inline=False)
     embed.add_field(name="!ping", value="Check bot latency", inline=False)
     embed.add_field(name="!hello", value="Say hello to the bot", inline=False)
