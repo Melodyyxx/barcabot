@@ -366,6 +366,33 @@ async def test_goal(ctx):
         await ctx.send(f"❌ Error: {e}")
 
 @bot.command()
+@commands.has_permissions(manage_messages=True)  # Requires "Manage Messages" permission
+async def clear(ctx, amount: int):
+    """Delete a specified number of messages"""
+    if amount <= 0:
+        await ctx.send("nigga choose how many messages you want me to delete")
+        return
+    
+    if amount > 100:
+        await ctx.send("lo, due to discords API I can only go until 100")
+        return
+    
+    try:
+        # Delete the command message first
+        await ctx.message.delete()
+        
+        # Delete the specified number of messages
+        deleted = await ctx.channel.purge(limit=amount)
+        
+        # Send confirmation (will be deleted after 3 seconds)
+        confirmation = await ctx.send(f"✅ Deleted {len(deleted)} messages!", delete_after=3)
+        
+    except discord.Forbidden:
+        await ctx.send("❌ I don't have permission to delete messages in this channel!")
+    except discord.HTTPException as e:
+        await ctx.send(f"❌ Error deleting messages: {e}")
+
+@bot.command()
 async def help_bot(ctx):
     """Show all available commands"""
     embed = discord.Embed(
@@ -375,8 +402,9 @@ async def help_bot(ctx):
     embed.add_field(name="!barca", value="Show upcoming Barcelona matches", inline=False)
     embed.add_field(name="!barca_live", value="Show only LIVE matches", inline=False)
     embed.add_field(name="!echo [message]", value="Repeat your message", inline=False)
+    embed.add_field(name="!clear [amount]", value="Delete messages (requires permissions)", inline=False)  # NEW
     embed.add_field(name="!test_notification", value="Test match start notifications", inline=False)
-    embed.add_field(name="!test_goal", value="Test goal notifications", inline=False)  # NEW
+    embed.add_field(name="!test_goal", value="Test goal notifications", inline=False)
     embed.add_field(name="!ping", value="Check bot latency", inline=False)
     embed.add_field(name="!hello", value="Say hello to the bot", inline=False)
     embed.add_field(name="!hi", value="Say hi to the bot", inline=False)
