@@ -250,6 +250,18 @@ async def hi(ctx):
     await ctx.send(f'👋 Hi {ctx.author.mention}!')
 
 @bot.command()
+async def echo(ctx, *, message):
+    """Repeat whatever message you send"""
+    # Delete the original command message
+    try:
+        await ctx.message.delete()
+    except:
+        pass  # If we can't delete it, just continue
+    
+    # Send the echoed message
+    await ctx.send(message)
+
+@bot.command()
 async def help_bot(ctx):
     """Show all available commands"""
     embed = discord.Embed(
@@ -258,6 +270,8 @@ async def help_bot(ctx):
     )
     embed.add_field(name="!barca", value="Show upcoming Barcelona matches", inline=False)
     embed.add_field(name="!barca_live", value="Show only LIVE matches", inline=False)
+    embed.add_field(name="!player [name]", value="Get player stats and info", inline=False)
+    embed.add_field(name="!echo [message]", value="Repeat your message", inline=False)  # NEW
     embed.add_field(name="!test_notification", value="Test if match notifications work", inline=False)
     embed.add_field(name="!ping", value="Check bot latency", inline=False)
     embed.add_field(name="!hello", value="Say hello to the bot", inline=False)
